@@ -1,3 +1,4 @@
+import time
 import sympy as sp
 import numpy as np
 from sympy import symbols, diff, sin, cos
@@ -117,7 +118,7 @@ class InverseKinematics:
         beta = np.arctan2(a3 * np.sin(q3_rad), a2 + a3 * np.cos(q3_rad))
         q2_rad = alpha - beta
 
-        # 5. Pasar a grados para el MyCobot
+        #Pasar a grados para el MyCobot
         q1 = np.degrees(q1_rad)
         q2 = np.degrees(q2_rad)
         q3 = np.degrees(q3_rad)
@@ -131,3 +132,79 @@ class CollisionChecker:
 
     def check_collision(self, joints):
         return False
+    
+###TEST FK###
+fk = ForwardKinematics()
+
+# Definimos 5 configuraciones distintas de ángulos en grados [q1, q2, q3, q4, q5, q6]
+cinco_configuraciones = [
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],         # Config 1: Home / Todo recto
+    [30.0, 15.0, -20.0, 0.0, 45.0, 0.0],    # Config 2: Movimiento general 
+    [-45.0, -10.0, 30.0, 15.0, -30.0, 10.0],# Config 3: Movimiento opuesto
+    [0.0, 45.0, -45.0, 0.0, 90.0, 0.0],     # Config 4: Ángulos rectos
+    [15.0, -30.0, 45.0, -15.0, 0.0, 25.0]   # Config 5: Postura arbitraria
+]
+
+print("CONFIGURACIÓN | ERROR X (mm) | ERROR Y (mm) | ERROR Z (mm)")
+print("-" * 65)
+
+for idx, angulos in enumerate(cinco_configuraciones, 1):
+    # 1. Mover el robot real mediante la API del fabricante
+    mc.send_angles(angulos, 30)
+    time.sleep(3.0) # Esperamos 3 segundos a que se detenga físicamente
+    
+    # 2. Leer la posición cartesiana real reportada por el fabricante
+    coords_robot = mc.get_coords()
+    
+    # 3. Calcular la matriz homogénea teórica con TU código
+    T_tuya = fk.compute_fk(angulos)
+    mi_x = T_tuya[0, 3]
+    mi_y = T_tuya[1, 3]
+    mi_z = T_tuya[2, 3]
+    
+    if coords_robot:
+        # 4. Calcular el error absoluto matemático en mm
+        err_x = abs(mi_x - coords_robot[0])
+        err_y = abs(mi_y - coords_robot[1])
+        err_z = abs(mi_z - coords_robot[2])
+        
+        print(f"Config {idx}     | {err_x:12.3f} | {err_y:12.3f} | {err_z:12.3f}")
+    else:
+        print(f"Config {idx}     | Error al leer datos del robot físico.")
+
+###TEST IK##
+ik = InverseKinematics(fk)
+
+# Definimos 3 posiciones [X, Y, Z] en mm que sean seguras y alcanzables para el brazo
+tres_posiciones = [
+    [140.0, 0.0, 220.0],    # Posición 1: Centrado y elevado
+    [120.0, 60.0, 180.0],   # Posición 2: Lateral medio
+    [150.0, -40.0, 200.0]   # Posición 3: Lateral opuesto bajo
+]
+
+print("POSICIÓN OBJETIVO   | ERROR q1 (°) | ERROR q2 (°) | ERROR q3 (°)")
+print("-" * 65)
+
+for idx, pos in enumerate(tres_posiciones, 1):
+    x_obj, y_obj, z_obj = pos
+    
+    # 1. Tu algoritmo calcula analíticamente qué ángulos se necesitan
+    tus_angulos = ik.ik_solve(x_obj, y_obj, z_obj)
+    
+    # 2. Le ordenamos al robot real ir a esa coordenada usando su API cartesiana nativa
+    # Nota: Pasamos orientaciones [rx, ry, rz] en 0 para la trayectoria
+    mc.send_coords([x_obj, y_obj, z_obj, 0.0, 0.0, 0.0], 30, 1)
+    time.sleep(3.5) # Esperamos a que los motores completen la trayectoria
+    
+    # 3. Leemos qué ángulos reales adoptaron físicamente los servomotores
+    angulos_robot = mc.get_angles()
+    
+    if angulos_robot:
+        # 4. Comparamos los primeros 3 joints del modelo planar contra la realidad física
+        err_q1 = abs(tus_angulos[0] - angulos_robot[0])
+        err_q2 = abs(tus_angulos[1] - angulos_robot[1])
+        err_q3 = abs(tus_angulos[2] - angulos_robot[2])
+        
+        print(f"Pos {idx} {str(pos):10} | {err_q1:12.3f} | {err_q2:12.3f} | {err_q3:12.3f}")
+    else:
+        print(f"Pos {idx} {str(pos):10} | Error al leer los ángulos de los motores.")
