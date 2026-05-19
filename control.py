@@ -6,7 +6,11 @@ mc.power_on()
 time.sleep(1)
 
 while True:
-    input("Presiona ENTER para leer coordenadas...")
+    opcion = input("Presiona ENTER para leer coordenadas o escribe salir: ")
+
+    if opcion.lower() == "salir":
+        break
+
     print("Ángulos:", mc.get_angles())
     print("Coordenadas:", mc.get_coords())
     print()
