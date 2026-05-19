@@ -24,9 +24,11 @@ def rotz(ang):
   return M
 
 # definimos DH
-def DH(theta,d,a,alpha):
-  tr = rotz(theta)*trans(0,0,d)*trans(a,0,0)*rotx(alpha)
-  return tr
+def DH(theta, d, a, alpha):
+    rad_theta = np.radians(theta) if isinstance(theta, (int, float)) else theta
+    rad_alpha = np.radians(alpha) if isinstance(alpha, (int, float)) else np.radians(alpha)
+    tr = rotz(theta) * trans(0, 0, d) * trans(a, 0, 0) * rotx(rad_alpha)
+    return tr
 
 # definimos las variables simbolicas
 θ1, θ2, θ3, θ4, θ5, θ6 = sp.symbols('θ1 θ2 θ3 θ4 θ5 θ6')
@@ -62,12 +64,8 @@ class ForwardKinematics:
     def _dh_matrix(self, theta, d, a, alpha):
         rad_theta = np.radians(theta)
         rad_alpha = np.radians(alpha)
-        
-        ct = np.cos(rad_theta)
-        st = np.sin(rad_theta)
-        ca = np.cos(rad_alpha)
-        sa = np.sin(rad_alpha)
-        
+        ct = np.cos(rad_theta); st = np.sin(rad_theta)
+        ca = np.cos(rad_alpha); sa = np.sin(rad_alpha)
         return np.array([
             [ct, -st * ca,  st * sa, a * ct],
             [st,  ct * ca, -ct * sa, a * st],
@@ -76,54 +74,62 @@ class ForwardKinematics:
         ])
 
     def compute_fk(self, joints):
+        # COMPENSACIÓN DE HARDWARE: Mapeamos los ángulos de la API a la matemática DH real
+        # El MyCobot físico desfasa q2 y q3 respecto a la vertical estándar
         q1, q2, q3, q4, q5, q6 = joints
         
-        A1_num = self._dh_matrix(q1, self.d1, 0, 90)
-        A2_num = self._dh_matrix(q2, 0, self.a2, 0)
-        A3_num = self._dh_matrix(q3, 0, self.a3, 0)
-        A4_num = self._dh_matrix(q4, self.d4, 0, -90)
-        A5_num = self._dh_matrix(q5, self.d5, 0, 90)
-        A6_num = self._dh_matrix(q6, self.d6, 0, 0)
+        # Ajuste geométrico típico para MyCobot 280 en DH:
+        math_q1 = q1
+        math_q2 = q2 - 90.0
+        math_q3 = q3
+        math_q4 = q4 - 90.0
+        math_q5 = q5
         
-        T_0_6 = A1_num @ A2_num @ A3_num @ A4_num @ A5_num @ A6_num
+        A1 = self._dh_matrix(math_q1, self.d1, 0, 90)
+        A2 = self._dh_matrix(math_q2, 0, self.a2, 0)
+        A3 = self._dh_matrix(math_q3, 0, self.a3, 0)
+        A4 = self._dh_matrix(math_q4, self.d4, 0, -90)
+        A5 = self._dh_matrix(math_q5, self.d5, 0, 90)
+        A6 = self._dh_matrix(q6, self.d6, 0, 0)
+        
+        T_0_6 = A1 @ A2 @ A3 @ A4 @ A5 @ A6
         return T_0_6
-    
+
+
 class InverseKinematics:
     def __init__(self, fk_model: ForwardKinematics):
         self.fk = fk_model
 
     def ik_solve(self, x, y, z):
-        #Plano 2R + Base
         d1 = self.fk.d1
         a2 = self.fk.a2
         a3 = self.fk.a3
 
-        #Base
+        # 1. Ángulo de la Base
         q1_rad = np.arctan2(y, x)
 
-        #brazo
+        # 2. Traslación al plano del brazo
         r = np.sqrt(x**2 + y**2)
         zc = z - d1 
 
-        #Codo
+        # 3. Ley de cosenos (Codo)
         num = r**2 + zc**2 - a2**2 - a3**2
         den = 2 * a2 * a3
         cos_q3 = np.clip(num / den, -1.0, 1.0)
         
-        #codo arriba
-        q3_rad = np.arccos(cos_q3) 
+        # Cambiamos a la solución alternativa (codo invertido) usando el signo negativo
+        q3_rad = -np.arccos(cos_q3) 
 
-        #Hombro
+        # 4. Ángulo del Hombro
         alpha = np.arctan2(zc, r)
         beta = np.arctan2(a3 * np.sin(q3_rad), a2 + a3 * np.cos(q3_rad))
         q2_rad = alpha - beta
 
-        #Pasar a grados para el MyCobot
+        # 5. Convertir a grados e invertir los desfases aplicados en la FK
         q1 = np.degrees(q1_rad)
-        q2 = np.degrees(q2_rad)
+        q2 = np.degrees(q2_rad) + 90.0  # Deshacemos el offset de los 90 grados del motor físico
         q3 = np.degrees(q3_rad)
 
-        # Dejamos las muñecas en 0 por la simplificación planar solicitada
         return [q1, q2, q3, 0.0, 0.0, 0.0]
 
 class CollisionChecker:
