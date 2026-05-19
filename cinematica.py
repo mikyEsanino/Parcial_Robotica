@@ -4,42 +4,22 @@ import numpy as np
 
 sp.init_printing(use_unicode=True)
 
-def DH_matrix_calculo(theta, d, a, alpha, es_simbolico=False):
-    if es_simbolico:
-        ct = sp.cos(theta); st = sp.sin(theta)
-        ca = sp.cos(alpha); sa = sp.sin(alpha)
-        return sp.Matrix([
-            [ct, -st * ca,  st * sa, a * ct],
-            [st,  ct * ca, -ct * sa, a * st],
-            [0,   sa,       ca,      d     ],
-            [0,   0,        0,       1     ]
-        ])
-    else:
-        rad_theta = np.radians(theta)
-        rad_alpha = np.radians(alpha)
-        ct = np.cos(rad_theta); st = np.sin(rad_theta)
-        ca = np.cos(rad_alpha); sa = np.sin(rad_alpha)
-        return np.array([
-            [ct, -st * ca,  st * sa, a * ct],
-            [st,  ct * ca, -ct * sa, a * st],
-            [0,   sa,       ca,      d     ],
-            [0,   0,        0,       1     ]
-        ])
-
-# Variables simbólicas
-θ1, θ2, θ3, θ4, θ5, θ6 = sp.symbols('θ1 θ2 θ3 θ4 θ5 θ6')
-
-# Expresión simbólica exacta usando sp.pi (Para tu reporte P1)
-A1 = DH_matrix_calculo(θ1, 131.56, 0, 90 * sp.pi / 180, es_simbolico=True)
-A2 = DH_matrix_calculo(θ2, 0, 110.4, 0, es_simbolico=True)
-A3 = DH_matrix_calculo(θ3, 0, 96, 0, es_simbolico=True)
-A4 = DH_matrix_calculo(θ4, 66.39, 0, -90 * sp.pi / 180, es_simbolico=True)
-A5 = DH_matrix_calculo(θ5, 73.18, 0, 90 * sp.pi / 180, es_simbolico=True)
-A6 = DH_matrix_calculo(θ6, 48.6, 0, 0, es_simbolico=True)
-
+def DH_matrix(theta_deg, d, a, alpha_deg):
+    """Matriz de transformación DH en grados"""
+    theta = np.radians(theta_deg)
+    alpha = np.radians(alpha_deg)
+    ct = np.cos(theta); st = np.sin(theta)
+    ca = np.cos(alpha); sa = np.sin(alpha)
+    return np.array([
+        [ct, -st*ca,  st*sa, a*ct],
+        [st,  ct*ca, -ct*sa, a*st],
+        [0,   sa,     ca,     d],
+        [0,   0,      0,      1]
+    ])
 
 class ForwardKinematics:
     def __init__(self):
+        # Parámetros DH del MyCobot 280
         self.d1 = 131.56
         self.a2 = 110.4
         self.a3 = 96.0
@@ -50,21 +30,16 @@ class ForwardKinematics:
     def compute_fk(self, joints):
         q1, q2, q3, q4, q5, q6 = joints
         
-        math_q1 = q1
-        math_q2 = q2 - 90.0
-        math_q3 = q3
-        math_q4 = q4 - 90.0
-        math_q5 = q5
+        # Matrices DH con offsets consistentes (sin restas arbitrarias)
+        A1 = DH_matrix(q1, self.d1, 0, 90)
+        A2 = DH_matrix(q2, 0, self.a2, 0)
+        A3 = DH_matrix(q3, 0, self.a3, 0)
+        A4 = DH_matrix(q4, self.d4, 0, -90)
+        A5 = DH_matrix(q5, self.d5, 0, 90)
+        A6 = DH_matrix(q6, self.d6, 0, 0)
         
-        A1_n = DH_matrix_calculo(math_q1, self.d1, 0, 90)
-        A2_n = DH_matrix_calculo(math_q2, 0, self.a2, 0)
-        A3_n = DH_matrix_calculo(math_q3, 0, self.a3, 0)
-        A4_n = DH_matrix_calculo(math_q4, self.d4, 0, -90)
-        A5_n = DH_matrix_calculo(math_q5, self.d5, 0, 90)
-        A6_n = DH_matrix_calculo(q6, self.d6, 0, 0)
-        
-        return A1_n @ A2_n @ A3_n @ A4_n @ A5_n @ A6_n
-
+        T = A1 @ A2 @ A3 @ A4 @ A5 @ A6
+        return T
 
 class InverseKinematics:
     def __init__(self, fk_model: ForwardKinematics):
@@ -75,31 +50,42 @@ class InverseKinematics:
         a2 = self.fk.a2
         a3 = self.fk.a3
 
-        # 1. Ángulo de la Base
+        # 1. Base
         q1_rad = np.arctan2(y, x)
 
-        # 2. Proyección en el plano vertical
+        # 2. Proyección en plano vertical
         r = np.sqrt(x**2 + y**2)
-        zc = z - d1 
+        zc = z - d1
 
-        # 3. Ley de Cosenos para el Codo
-        num = r**2 + zc**2 - a2**2 - a3**2
-        den = 2 * a2 * a3
-        cos_q3 = np.clip(num / den, -1.0, 1.0)
+        # 3. Ley de cosenos para codo
+        cos_q3 = np.clip((r**2 + zc**2 - a2**2 - a3**2)/(2*a2*a3), -1.0, 1.0)
         
-        q3_rad = -np.arccos(cos_q3) 
+        # Dos soluciones de codo
+        q3_rad_up = np.arccos(cos_q3)      # codo arriba
+        q3_rad_down = -np.arccos(cos_q3)   # codo abajo
 
-        # 4. Ángulo del Hombro
-        alpha = np.arctan2(zc, r)
-        beta = np.arctan2(a3 * np.sin(q3_rad), a2 + a3 * np.cos(q3_rad))
-        q2_rad = alpha - beta
+        # 4. Ángulo del hombro para ambas soluciones
+        def q2_for_q3(q3_rad):
+            alpha = np.arctan2(zc, r)
+            beta = np.arctan2(a3 * np.sin(q3_rad), a2 + a3 * np.cos(q3_rad))
+            return alpha - beta
 
-        # 5. Conversión a grados aplicando la inversa de los offsets de hardware
-        q1 = np.degrees(q1_rad)
-        q2 = np.degrees(q2_rad) + 90.0 
-        q3 = np.degrees(q3_rad)
+        q2_rad_up = q2_for_q3(q3_rad_up)
+        q2_rad_down = q2_for_q3(q3_rad_down)
 
-        return [q1, q2, q3, 0.0, 0.0, 0.0]
+        # 5. Convertir a grados
+        solutions = [
+            [np.degrees(q1_rad), np.degrees(q2_rad_up), np.degrees(q3_rad_up)],
+            [np.degrees(q1_rad), np.degrees(q2_rad_down), np.degrees(q3_rad_down)]
+        ]
+
+        # Seleccionar solución más “natural” (codo abajo preferido)
+        chosen = solutions[1]  # puedes cambiar a 0 si quieres codo arriba
+
+        # Completar ángulos restantes como 0 para simplificación
+        chosen += [0.0, 0.0, 0.0]
+
+        return chosen
 
 class CollisionChecker:
     def __init__(self):
