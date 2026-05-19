@@ -6,12 +6,7 @@ mc.power_on()
 time.sleep(1)
 
 while True:
-    nombre = input("Nombre de la pose: ")
-
-    if nombre == "salir":
-        break
-
-    print(nombre)
+    input("Presiona ENTER para leer coordenadas...")
     print("Ángulos:", mc.get_angles())
     print("Coordenadas:", mc.get_coords())
     print()
