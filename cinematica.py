@@ -1,4 +1,5 @@
 import sympy as sp
+import numpy as np
 from sympy import symbols, diff, sin, cos
 from sympy.physics.mechanics import dynamicsymbols
 
@@ -47,3 +48,44 @@ sp.pprint(A5)
 
 A6 = DH(θ6, 48.6, 0, 0) #gripper
 sp.pprint(A6)
+
+class ForwardKinematics:
+    def __init__(self):
+        """Inicializa las longitudes físicas de los eslabones (en mm)"""
+        self.d1 = 131.56
+        self.a2 = 110.4
+        self.a3 = 96.0
+        self.d4 = 66.39
+        self.d5 = 73.18
+        self.d6 = 48.6
+
+    def _dh_matrix(self, theta, d, a, alpha):
+        """Función auxiliar numérica usando NumPy"""
+        rad_theta = np.radians(theta)
+        rad_alpha = np.radians(alpha)
+        
+        ct = np.cos(rad_theta)
+        st = np.sin(rad_theta)
+        ca = np.cos(rad_alpha)
+        sa = np.sin(rad_alpha)
+        
+        return np.array([
+            [ct, -st * ca,  st * sa, a * ct],
+            [st,  ct * ca, -ct * sa, a * st],
+            [0,   sa,       ca,      d     ],
+            [0,   0,        0,       1     ]
+        ])
+
+    def compute_fk(self, joints):
+        """P2: Calcula la matriz de transformación homogénea T_0_6 final"""
+        q1, q2, q3, q4, q5, q6 = joints
+        
+        A1_num = self._dh_matrix(q1, self.d1, 0, 90)
+        A2_num = self._dh_matrix(q2, 0, self.a2, 0)
+        A3_num = self._dh_matrix(q3, 0, self.a3, 0)
+        A4_num = self._dh_matrix(q4, self.d4, 0, -90)
+        A5_num = self._dh_matrix(q5, self.d5, 0, 90)
+        A6_num = self._dh_matrix(q6, self.d6, 0, 0)
+        
+        T_0_6 = A1_num @ A2_num @ A3_num @ A4_num @ A5_num @ A6_num
+        return T_0_6
