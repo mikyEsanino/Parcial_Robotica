@@ -51,7 +51,6 @@ sp.pprint(A6)
 
 class ForwardKinematics:
     def __init__(self):
-        """Inicializa las longitudes físicas de los eslabones (en mm)"""
         self.d1 = 131.56
         self.a2 = 110.4
         self.a3 = 96.0
@@ -60,7 +59,6 @@ class ForwardKinematics:
         self.d6 = 48.6
 
     def _dh_matrix(self, theta, d, a, alpha):
-        """Función auxiliar numérica usando NumPy"""
         rad_theta = np.radians(theta)
         rad_alpha = np.radians(alpha)
         
@@ -77,7 +75,6 @@ class ForwardKinematics:
         ])
 
     def compute_fk(self, joints):
-        """P2: Calcula la matriz de transformación homogénea T_0_6 final"""
         q1, q2, q3, q4, q5, q6 = joints
         
         A1_num = self._dh_matrix(q1, self.d1, 0, 90)
@@ -89,3 +86,48 @@ class ForwardKinematics:
         
         T_0_6 = A1_num @ A2_num @ A3_num @ A4_num @ A5_num @ A6_num
         return T_0_6
+    
+class InverseKinematics:
+    def __init__(self, fk_model: ForwardKinematics):
+        self.fk = fk_model
+
+    def ik_solve(self, x, y, z):
+        #Plano 2R + Base
+        d1 = self.fk.d1
+        a2 = self.fk.a2
+        a3 = self.fk.a3
+
+        #Base
+        q1_rad = np.arctan2(y, x)
+
+        #brazo
+        r = np.sqrt(x**2 + y**2)
+        zc = z - d1 
+
+        #Codo
+        num = r**2 + zc**2 - a2**2 - a3**2
+        den = 2 * a2 * a3
+        cos_q3 = np.clip(num / den, -1.0, 1.0)
+        
+        #codo arriba
+        q3_rad = np.arccos(cos_q3) 
+
+        #Hombro
+        alpha = np.arctan2(zc, r)
+        beta = np.arctan2(a3 * np.sin(q3_rad), a2 + a3 * np.cos(q3_rad))
+        q2_rad = alpha - beta
+
+        # 5. Pasar a grados para el MyCobot
+        q1 = np.degrees(q1_rad)
+        q2 = np.degrees(q2_rad)
+        q3 = np.degrees(q3_rad)
+
+        # Dejamos las muñecas en 0 por la simplificación planar solicitada
+        return [q1, q2, q3, 0.0, 0.0, 0.0]
+
+class CollisionChecker:
+    def __init__(self):
+        pass
+
+    def check_collision(self, joints):
+        return False
