@@ -190,3 +190,10 @@ for idx, pos in enumerate(tres_posiciones, 1):
         print(f"Pos {idx} {str(pos):18} | {err_q1:12.3f} | {err_q2:12.3f} | {err_q3:12.3f}")
     else:
         print(f"Pos {idx} {str(pos):18} | Error al leer los ángulos de los motores.")
+
+fk = ForwardKinematics()
+
+# Sin offset
+T1 = fk.compute_fk([0, 0, 0, 0, 0, 0])
+print("Tu FK actual:", round(T1[0,3],1), round(T1[1,3],1), round(T1[2,3],1))
+print("Robot real:   50.3, -63.3, 409.8")
