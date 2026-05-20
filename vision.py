@@ -3,9 +3,7 @@
 
 import cv2 as cv
 import numpy as np
-import math
 import logging
-from datetime import datetime
 
 # ════════════════════════════════════════════════════════════════════════════
 # LOGGING
@@ -19,8 +17,7 @@ log = logging.getLogger("vision")
 
 # ════════════════════════════════════════════════════════════════════════════
 # RANGOS HSV CALIBRADOS
-# Tomados directamente de HSV_config.txt del repositorio
-# El Rol 4 debe verificar y ajustar estos valores en el laboratorio
+# Actualizar con valores del HSV_calibration.ipynb en laboratorio
 # ════════════════════════════════════════════════════════════════════════════
 
 COLOR_HSV = {
@@ -30,238 +27,156 @@ COLOR_HSV = {
     "yellow": ((21,  172, 185),  (255, 255, 242)),
 }
 
-
 TARGET_COLOR = "red"
 
 # ════════════════════════════════════════════════════════════════════════════
-# PARÁMETROS DE CONVERSIÓN  píxel → metros → mm
-# Tomados de grasp_controller.py del repositorio
+# PARÁMETROS DEL RECTÁNGULO VISIBLE
+# Medidas reales del área que ve la cámara en watch_pose
 # ════════════════════════════════════════════════════════════════════════════
 
-# Offsets de calibración (del repositorio original)
-OFFSET_X = -0.012    # metros
-OFFSET_Y =  0.0005   # metros
+# Resolución
+IMG_W = 640
+IMG_H = 480
 
-# Área mínima del contorno para considerar detección válida
-AREA_MINIMA = 1000   # píxeles²
+# Área real visible en mm
+AREA_X_MM  = 130.0    # ancho real
+AREA_Y_MM  = 167.5    # alto real
+
+# Bordes del rectángulo en píxeles
+# Calibrar en laboratorio midiendo dónde caen los bordes en la imagen
+X_LEFT   = 0           # píxel borde izquierdo
+X_RIGHT  = IMG_W       # píxel borde derecho
+Y_TOP    = 0           # píxel borde superior
+Y_BOTTOM = IMG_H       # píxel borde inferior
+
+# Watch pose
+WATCH_ANGLES = [9.05, 3.42, -1.4, -73.21, 2.1, -30.23]
+
+# Área mínima del contorno
+AREA_MINIMA = 1000
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# CLASE PRINCIPAL — basada en identify_GetTarget del repositorio
+# CONVERSIÓN  píxel → mm
+# Fórmula proporcionada por el Rol 3 (Control)
+# Origen (0,0) = centro del rectángulo
+# x_mm va de -65 a +65
+# y_mm va de -83.75 a +83.75
 # ════════════════════════════════════════════════════════════════════════════
 
-class identify_GetTarget:
+def pixel_a_mm(cx: float, cy: float) -> tuple:
     """
-    Detecta objetos de color en un frame de cámara.
-    Código basado en jetcobot_color_identify/identify_target.py
-    """
+    Convierte centroide (cx, cy) en píxeles a (x_mm, y_mm) en mm.
 
-    def __init__(self):
-        self.image      = None
-        self.color_name = None
-
-    def get_Sqaure(self, color_hsv: tuple):
-        """
-        Detecta el objeto por color HSV y devuelve su posición.
-
-        Parámetros
-        ----------
-        color_hsv : ((H_low, S_low, V_low), (H_high, S_high, V_high))
-
-        Devuelve
-        --------
-        (a, b, yaw) en metros  |  None si no detecta nada
-            a   = posición horizontal  (eje Y del robot)
-            b   = posición frontal     (eje X del robot)
-            yaw = ángulo de rotación del objeto en grados
-        """
-        try:
-            (lowerb, upperb) = color_hsv
-
-            # Máscara de color
-            mask    = self.image.copy()
-            hsv_img = cv.cvtColor(self.image, cv.COLOR_BGR2HSV)
-            img     = cv.inRange(hsv_img, lowerb, upperb)
-            mask[img == 0] = [0, 0, 0]
-
-            # Morfología para limpiar ruido
-            kernel  = cv.getStructuringElement(cv.MORPH_RECT, (5, 5))
-            dst_img = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
-
-            # Binarización
-            dst_img       = cv.cvtColor(dst_img, cv.COLOR_RGB2GRAY)
-            _, binary     = cv.threshold(dst_img, 10, 255, cv.THRESH_BINARY)
-
-            # Encontrar contornos
-            find_contours = cv.findContours(
-                binary, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
-            )
-            contours = find_contours[1] if len(find_contours) == 3 \
-                       else find_contours[0]
-
-            if not contours:
-                return None
-
-            # Contorno más grande → ángulo de rotación (yaw)
-            c    = max(contours, key=cv.contourArea)
-            rect = cv.minAreaRect(c)
-            yaw  = rect[2]
-
-            # Dibujar rectángulo mínimo en el frame (visible en el video)
-            corners = np.int64(cv.boxPoints(rect))
-            cv.drawContours(self.image, [corners], 0, (255, 0, 0), 3)
-
-            # Calcular centroide de cada contorno válido
-            for cnt in contours:
-                x, y, w, h = cv.boundingRect(cnt)
-                area        = cv.contourArea(cnt)
-
-                if area > AREA_MINIMA:
-                    # Centroide en píxeles
-                    cx = float(x + w / 2)
-                    cy = float(y + h / 2)
-
-                    # Dibujar centroide y etiqueta en el frame
-                    cv.circle(self.image, (int(cx), int(cy)),
-                              5, (0, 0, 255), -1)
-                    cv.putText(self.image, self.color_name,
-                               (int(x - 15), int(y - 15)),
-                               cv.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
-
-                    # ── Conversión píxel → metros ────────────────────────
-                    # Fórmula exacta del repositorio identify_target.py
-                    # Imagen normalizada a 640×480
-                    a = round((cx - 320) / 4000, 5)
-                    b = round((480 - cy) / 3000 * 0.7 + 0.15, 5)
-
-                    log.debug("Centroide: (%.1f, %.1f) px → a=%.5f m, b=%.5f m",
-                              cx, cy, a, b)
-                    return (a, b, yaw)
-
-        except Exception as e:
-            log.error("get_Sqaure error: %s", e)
-            return None
-
-    def select_color(self, image: np.ndarray,
-                     color_hsv: dict, color_list: dict):
-        """
-        Detecta todos los colores de color_list en el frame.
-
-        Parámetros
-        ----------
-        image      : frame BGR de OpenCV (cualquier resolución)
-        color_hsv  : dict {nombre: (lower, upper)} con rangos HSV
-        color_list : dict {'1': 'red', '2': 'green', ...}
-
-        Devuelve
-        --------
-        (frame_anotado, msg)
-        msg = {nombre_color: (a, b, yaw)} — solo los detectados
-        """
-        # Normalizar a 640×480 (igual que el repositorio)
-        self.image = cv.resize(image, (640, 480))
-        msg = {}
-
-        if not color_list:
-            return self.image, msg
-
-        # Orden de prioridad igual al repositorio original
-        for key in ['4', '3', '2', '1']:
-            if key in color_list:
-                self.color_name = color_list[key]
-                pos = self.get_Sqaure(color_hsv[self.color_name])
-                if pos is not None:
-                    msg[self.color_name] = pos
-
-        return self.image, msg
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# CONVERSIÓN metros → mm  (sistema de referencia del robot)
-# ════════════════════════════════════════════════════════════════════════════
-
-def metros_a_mm(a: float, b: float) -> tuple[float, float]:
-    """
-    Convierte la posición del objeto de metros a mm en el sistema del robot.
-
-    El sistema de coordenadas del robot es:
-        x_robot = dirección frontal (b en la imagen)
-        y_robot = dirección lateral (-a en la imagen, eje invertido)
+    Fórmula:
+        x_mm = ((cx - x_left) / (x_right - x_left)) * 130.0 - 65.0
+        y_mm = 83.75 - ((cy - y_top) / (y_bottom - y_top)) * 167.5
 
     Parámetros
     ----------
-    a : posición horizontal de la imagen en metros
-    b : posición frontal de la imagen en metros
+    cx : centroide X en píxeles
+    cy : centroide Y en píxeles
 
     Devuelve
     --------
-    (x_mm, y_mm) en el sistema de referencia del robot
+    (x_mm, y_mm) con origen en el centro del rectángulo
     """
-    x_mm = (b + OFFSET_X) * 1000
-    y_mm = (-a + OFFSET_Y) * 1000
+    x_mm = ((cx - X_LEFT) / (X_RIGHT - X_LEFT)) * AREA_X_MM - (AREA_X_MM / 2)
+    y_mm = (AREA_Y_MM / 2) - ((cy - Y_TOP) / (Y_BOTTOM - Y_TOP)) * AREA_Y_MM
     return round(x_mm, 2), round(y_mm, 2)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# FUNCIÓN PRINCIPAL EXPORTADA — usada por main.py
+# DETECCIÓN — Pipeline P6
+# 1. Recibir frame
+# 2. Convertir a HSV
+# 3. Detectar cubo por color
+# 4. Encontrar contorno más grande
+# 5. Calcular centroide (cx, cy)
+# 6. Convertir a mm
+# 7. Devolver (x_mm, y_mm)
 # ════════════════════════════════════════════════════════════════════════════
 
-_detector = identify_GetTarget()
-
 def detect_object(frame: np.ndarray,
-                  color: str = TARGET_COLOR) -> tuple[float, float] | None:
+                  color: str = TARGET_COLOR) -> tuple:
     """
-    Detecta el objeto de color en el frame y devuelve su posición en mm.
+    Detecta el cubo de color y devuelve su posición en mm.
 
     Parámetros
     ----------
-    frame : imagen BGR capturada con cv2.VideoCapture
-    color : nombre del color a detectar ("red", "green", "blue", "yellow")
+    frame : imagen BGR de cv2.VideoCapture
+    color : color a detectar ("red", "green", "blue", "yellow")
 
     Devuelve
     --------
-    (x_mm, y_mm) en el sistema del robot  |  None si no hay objeto
+    (x_mm, y_mm) | None
     """
     if color not in COLOR_HSV:
-        log.error("Color '%s' no definido en COLOR_HSV.", color)
+        log.error("Color '%s' no definido.", color)
         return None
 
-    color_list = {'1': color}
-    _, msg     = _detector.select_color(frame, COLOR_HSV, color_list)
+    # Paso 1 — Normalizar frame
+    frame = cv.resize(frame, (IMG_W, IMG_H))
 
-    if color not in msg:
-        log.debug("Objeto '%s' no detectado.", color)
+    lower_bound = np.array(COLOR_HSV[color][0])
+    upper_bound = np.array(COLOR_HSV[color][1])
+
+    # Paso 2 — Convertir a HSV
+    hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
+
+    # Paso 3 — Detectar cubo por color
+    mask = cv.inRange(hsv, lower_bound, upper_bound)
+
+    # Limpiar ruido con morfología
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5))
+    mask   = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
+
+    # Paso 4 — Encontrar contorno más grande
+    contours, _ = cv.findContours(mask, cv.RETR_EXTERNAL,
+                                   cv.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
         return None
 
-    a, b, yaw = msg[color]
-    x_mm, y_mm = metros_a_mm(a, b)
+    cnt  = max(contours, key=cv.contourArea)
+    area = cv.contourArea(cnt)
 
-    log.info("Objeto '%s': a=%.5f m, b=%.5f m → x=%.1f mm, y=%.1f mm, yaw=%.1f°",
-             color, a, b, x_mm, y_mm, yaw)
-    return x_mm, y_mm
+    if area < AREA_MINIMA:
+        return None
+
+    # Paso 5 — Calcular centroide (cx, cy)
+    x, y, w, h = cv.boundingRect(cnt)
+    cx = float(x + w / 2)
+    cy = float(y + h / 2)
+
+    # Paso 6 — Convertir a mm
+    x_mm, y_mm = pixel_a_mm(cx, cy)
+
+    log.info("Cubo '%s': (%.1f,%.1f)px → (%.1f,%.1f)mm",
+             color, cx, cy, x_mm, y_mm)
+
+    # Paso 7 — Devolver posición
+    return (x_mm, y_mm)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# VALIDACIÓN — P6 paso 4: probar con 3 posiciones distintas del objeto
-# Ejecutar directamente: python3 vision.py
+# VALIDACIÓN P6 — tabla de 3 posiciones
+# Ejecutar: python3 vision.py
+# 'g' = guardar medición | 'q' = salir
 # ════════════════════════════════════════════════════════════════════════════
 
 def validar_deteccion():
-    """
-    Abre la cámara y muestra la detección en tiempo real.
-    Registra las posiciones detectadas para la tabla de validación del examen.
-    Presiona 'g' para guardar una medición, 'q' para salir.
-    """
+    """Valida la detección en 3 posiciones distintas del objeto."""
     cap = cv.VideoCapture(0)
     cap.set(6, cv.VideoWriter.fourcc('M', 'J', 'P', 'G'))
-    cap.set(cv.CAP_PROP_FRAME_WIDTH,  640)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv.CAP_PROP_FRAME_WIDTH,  IMG_W)
+    cap.set(cv.CAP_PROP_FRAME_HEIGHT, IMG_H)
 
     if not cap.isOpened():
         log.error("No se pudo abrir la cámara.")
         return
 
-    log.info("Cámara abierta. Presiona 'g' para guardar posición, 'q' para salir.")
+    log.info("Cámara abierta. 'g'=guardar  'q'=salir")
     mediciones = []
 
     while True:
@@ -269,37 +184,42 @@ def validar_deteccion():
         if not ret:
             break
 
-        # Detectar objeto
         resultado = detect_object(frame, TARGET_COLOR)
+        frame_show = frame.copy()
 
-        # Mostrar frame anotado
-        label = f"No detectado"
         if resultado:
             x_mm, y_mm = resultado
-            label = f"x={x_mm:.1f} mm  y={y_mm:.1f} mm"
+            cv.putText(frame_show,
+                       f"x={x_mm:.1f}mm  y={y_mm:.1f}mm",
+                       (10, 30), cv.FONT_HERSHEY_SIMPLEX,
+                       0.8, (0, 255, 0), 2)
+        else:
+            cv.putText(frame_show, "No detectado",
+                       (10, 30), cv.FONT_HERSHEY_SIMPLEX,
+                       0.8, (0, 0, 255), 2)
 
-        cv.putText(frame, label, (10, 30),
-                   cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv.imshow("P6 - Validacion vision", frame)
+        cv.imshow("P6 - Validacion vision", frame_show)
 
         key = cv.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('g') and resultado:
             mediciones.append(resultado)
-            log.info("Medicion %d guardada: x=%.1f mm, y=%.1f mm",
+            log.info("Medicion %d: (%.1f, %.1f) mm",
                      len(mediciones), resultado[0], resultado[1])
 
     cap.release()
     cv.destroyAllWindows()
 
-    # Mostrar tabla de validación (P6 entregable)
+    # Tabla de validación para el informe
     print("\n══ TABLA DE VALIDACIÓN P6 ══")
-    print(f"{'#':>3} | {'x_mm':>8} | {'y_mm':>8}")
-    print("-" * 28)
+    print(f"{'#':>3} | {'x_real(mm)':>10} | {'y_real(mm)':>10} | "
+          f"{'x_det(mm)':>10} | {'y_det(mm)':>10} | {'error(mm)':>10}")
+    print("-" * 65)
     for i, (x, y) in enumerate(mediciones):
-        print(f"{i+1:>3} | {x:>8.1f} | {y:>8.1f}")
-    print(f"\nTotal mediciones guardadas: {len(mediciones)}")
+        print(f"{i+1:>3} | {'medir':>10} | {'medir':>10} | "
+              f"{x:>10.1f} | {y:>10.1f} | {'calcular':>10}")
+    print("\nCompleta x_real e y_real midiendo con regla en el laboratorio.")
 
 
 if __name__ == "__main__":
