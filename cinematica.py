@@ -295,3 +295,25 @@ for idx, (x, y, z) in enumerate(tres_posiciones, 1):
         print(f"Pos {idx} {[x,y,z]} | {err_q1:12.3f} | {err_q2:12.3f} | {err_q3:12.3f}")
     else:
         print(f"Pos {idx} {[x,y,z]} | Error al leer los ángulos de los motores.")
+
+# Test definitivo de parámetros reales
+import numpy as np
+
+# Con estos datos que ya tenemos:
+# [0,90,0,0,0,0] -> Z=173.5  => d1=173.5
+# [0,0,0,0,0,0]  -> Z=409.8  => d1+a2+a3+muñeca=409.8
+# [0,0,90,0,0,0] -> Z=286.9  => d1+a2=286.9 => a2=113.4
+
+# Verificamos cuánto da la FK con estos valores
+def dh(t,d,a,al):
+    t,al=np.radians(t),np.radians(al)
+    ct,st,ca,sa=np.cos(t),np.sin(t),np.cos(al),np.sin(al)
+    return np.array([[ct,-st*ca,st*sa,a*ct],[st,ct*ca,-ct*sa,a*st],[0,sa,ca,d],[0,0,0,1]])
+
+d1=173.5; a2=113.4; a3=96.0; d4=63.4; d5=75.05; d6=51.8
+
+T = dh(0,d1,0,90) @ dh(0-90,0,a2,0) @ dh(0,0,a3,0) @ \
+    dh(0-90,d4,0,-90) @ dh(0,d5,0,90) @ dh(0,d6,0,0)
+
+print(f"FK home: ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
+print(f"Real:    (50.3, -63.3, 409.8)")
