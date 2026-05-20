@@ -1,226 +1,252 @@
-#!/usr/bin/env python3
-# encoding: utf-8
 
-import cv2 as cv
+
+Ir al contenido
+Uso de Correo de Universidad ESAN con lectores de pantalla
+
+1 de 2.833
+codigo
+Recibidos
+
+Jose Miguel APOLAYA LIRA <23100173@ue.edu.pe>
+Archivos adjuntos
+17:00 (hace 0 minutos)
+para mí
+
+
+ Un archivo adjunto
+  •  Analizados por Gmail
+import cv2
 import numpy as np
-import logging
 
-# ════════════════════════════════════════════════════════════════════════════
-# LOGGING
-# ════════════════════════════════════════════════════════════════════════════
+RECT_X_MM = 130.0
+RECT_Y_MM = 167.5
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  [%(levelname)s]  %(message)s"
-)
-log = logging.getLogger("vision")
+MANUAL_BOARD_POINTS = None
 
-# ════════════════════════════════════════════════════════════════════════════
-# RANGOS HSV CALIBRADOS
-# Actualizar con valores del HSV_calibration.ipynb en laboratorio
-# ════════════════════════════════════════════════════════════════════════════
-
-COLOR_HSV = {
-    "red":    ((0,   181,  46),  (10,  255, 234)),
-    "green":  ((34,   99,  45),  (76,  255, 255)),
-    "blue":   ((99,  129, 102),  (120, 255, 231)),
-    "yellow": ((21,  172, 185),  (255, 255, 242)),
+HSV_RANGES = {
+    "red1": ([0, 80, 80], [10, 255, 255]),
+    "red2": ([170, 80, 80], [180, 255, 255]),
+    "green": ([35, 50, 50], [85, 255, 255]),
+    "blue": ([90, 50, 50], [130, 255, 255]),
+    "yellow": ([20, 80, 80], [35, 255, 255])
 }
 
-TARGET_COLOR = "red"
 
-# ════════════════════════════════════════════════════════════════════════════
-# PARÁMETROS DEL RECTÁNGULO VISIBLE
-# Medidas reales del área que ve la cámara en watch_pose
-# ════════════════════════════════════════════════════════════════════════════
+def order_points(points):
+    points = np.array(points, dtype=np.float32)
 
-# Resolución
-IMG_W = 640
-IMG_H = 480
+    s = points.sum(axis=1)
+    diff = np.diff(points, axis=1)
 
-# Área real visible en mm
-AREA_X_MM  = 130.0    # ancho real
-AREA_Y_MM  = 167.5    # alto real
+    top_left = points[np.argmin(s)]
+    bottom_right = points[np.argmax(s)]
+    top_right = points[np.argmin(diff)]
+    bottom_left = points[np.argmax(diff)]
 
-# Bordes del rectángulo en píxeles
-# Calibrar en laboratorio midiendo dónde caen los bordes en la imagen
-X_LEFT   = 0           # píxel borde izquierdo
-X_RIGHT  = IMG_W       # píxel borde derecho
-Y_TOP    = 0           # píxel borde superior
-Y_BOTTOM = IMG_H       # píxel borde inferior
-
-# Watch pose
-WATCH_ANGLES = [9.05, 3.42, -1.4, -73.21, 2.1, -30.23]
-
-# Área mínima del contorno
-AREA_MINIMA = 1000
+    return np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# CONVERSIÓN  píxel → mm
-# Fórmula proporcionada por el Rol 3 (Control)
-# Origen (0,0) = centro del rectángulo
-# x_mm va de -65 a +65
-# y_mm va de -83.75 a +83.75
-# ════════════════════════════════════════════════════════════════════════════
+def find_board_points(frame):
+    if MANUAL_BOARD_POINTS is not None:
+        return order_points(MANUAL_BOARD_POINTS)
 
-def pixel_a_mm(cx: float, cy: float) -> tuple:
-    """
-    Convierte centroide (cx, cy) en píxeles a (x_mm, y_mm) en mm.
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 90, 255, cv2.THRESH_BINARY_INV)
 
-    Fórmula:
-        x_mm = ((cx - x_left) / (x_right - x_left)) * 130.0 - 65.0
-        y_mm = 83.75 - ((cy - y_top) / (y_bottom - y_top)) * 167.5
+    kernel = np.ones((5, 5), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    Parámetros
-    ----------
-    cx : centroide X en píxeles
-    cy : centroide Y en píxeles
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    Devuelve
-    --------
-    (x_mm, y_mm) con origen en el centro del rectángulo
-    """
-    x_mm = ((cx - X_LEFT) / (X_RIGHT - X_LEFT)) * AREA_X_MM - (AREA_X_MM / 2)
-    y_mm = (AREA_Y_MM / 2) - ((cy - Y_TOP) / (Y_BOTTOM - Y_TOP)) * AREA_Y_MM
-    return round(x_mm, 2), round(y_mm, 2)
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# DETECCIÓN — Pipeline P6
-# 1. Recibir frame
-# 2. Convertir a HSV
-# 3. Detectar cubo por color
-# 4. Encontrar contorno más grande
-# 5. Calcular centroide (cx, cy)
-# 6. Convertir a mm
-# 7. Devolver (x_mm, y_mm)
-# ════════════════════════════════════════════════════════════════════════════
-
-def detect_object(frame: np.ndarray,
-                  color: str = TARGET_COLOR) -> tuple:
-    """
-    Detecta el cubo de color y devuelve su posición en mm.
-
-    Parámetros
-    ----------
-    frame : imagen BGR de cv2.VideoCapture
-    color : color a detectar ("red", "green", "blue", "yellow")
-
-    Devuelve
-    --------
-    (x_mm, y_mm) | None
-    """
-    if color not in COLOR_HSV:
-        log.error("Color '%s' no definido.", color)
+    if len(contours) == 0:
         return None
 
-    # Paso 1 — Normalizar frame
-    frame = cv.resize(frame, (IMG_W, IMG_H))
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-    lower_bound = np.array(COLOR_HSV[color][0])
-    upper_bound = np.array(COLOR_HSV[color][1])
+    for contour in contours:
+        area = cv2.contourArea(contour)
 
-    # Paso 2 — Convertir a HSV
-    hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
+        if area < 1000:
+            continue
 
-    # Paso 3 — Detectar cubo por color
-    mask = cv.inRange(hsv, lower_bound, upper_bound)
+        peri = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.03 * peri, True)
 
-    # Limpiar ruido con morfología
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5))
-    mask   = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
+        if len(approx) == 4:
+            points = approx.reshape(4, 2)
+            return order_points(points)
 
-    # Paso 4 — Encontrar contorno más grande
-    contours, _ = cv.findContours(mask, cv.RETR_EXTERNAL,
-                                   cv.CHAIN_APPROX_SIMPLE)
+    largest = contours[0]
+    rect = cv2.minAreaRect(largest)
+    box = cv2.boxPoints(rect)
 
-    if not contours:
+    return order_points(box)
+
+
+def get_homography(board_points):
+    src = np.array(board_points, dtype=np.float32)
+
+    dst = np.array([
+        [-RECT_X_MM / 2, RECT_Y_MM / 2],
+        [RECT_X_MM / 2, RECT_Y_MM / 2],
+        [RECT_X_MM / 2, -RECT_Y_MM / 2],
+        [-RECT_X_MM / 2, -RECT_Y_MM / 2]
+    ], dtype=np.float32)
+
+    H, _ = cv2.findHomography(src, dst)
+
+    return H
+
+
+def pixel_to_mm(cx, cy, H):
+    point = np.array([[[cx, cy]]], dtype=np.float32)
+    result = cv2.perspectiveTransform(point, H)
+
+    x_mm = float(result[0][0][0])
+    y_mm = float(result[0][0][1])
+
+    return x_mm, y_mm
+
+
+def create_board_mask(frame, board_points):
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    points = np.array(board_points, dtype=np.int32)
+    cv2.fillPoly(mask, [points], 255)
+
+    return mask
+
+
+def get_color_mask(hsv, color):
+    if color == "red":
+        lower1 = np.array(HSV_RANGES["red1"][0], dtype=np.uint8)
+        upper1 = np.array(HSV_RANGES["red1"][1], dtype=np.uint8)
+        lower2 = np.array(HSV_RANGES["red2"][0], dtype=np.uint8)
+        upper2 = np.array(HSV_RANGES["red2"][1], dtype=np.uint8)
+
+        mask1 = cv2.inRange(hsv, lower1, upper1)
+        mask2 = cv2.inRange(hsv, lower2, upper2)
+
+        return cv2.bitwise_or(mask1, mask2)
+
+    lower = np.array(HSV_RANGES[color][0], dtype=np.uint8)
+    upper = np.array(HSV_RANGES[color][1], dtype=np.uint8)
+
+    return cv2.inRange(hsv, lower, upper)
+
+
+def detect_cube(frame):
+    board_points = find_board_points(frame)
+
+    if board_points is None:
         return None
 
-    cnt  = max(contours, key=cv.contourArea)
-    area = cv.contourArea(cnt)
+    H = get_homography(board_points)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    board_mask = create_board_mask(frame, board_points)
 
-    if area < AREA_MINIMA:
+    best_result = None
+    best_area = 0
+
+    for color in ["red", "green", "blue", "yellow"]:
+        mask = get_color_mask(hsv, color)
+        mask = cv2.bitwise_and(mask, board_mask)
+
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+
+            if area < 300:
+                continue
+
+            if area > best_area:
+                M = cv2.moments(contour)
+
+                if M["m00"] == 0:
+                    continue
+
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+
+                x_mm, y_mm = pixel_to_mm(cx, cy, H)
+
+                best_result = {
+                    "color": color,
+                    "x_mm": x_mm,
+                    "y_mm": y_mm,
+                    "cx": cx,
+                    "cy": cy,
+                    "area": area,
+                    "board_points": board_points
+                }
+
+                best_area = area
+
+    return best_result
+
+
+def detect_object(frame):
+    result = detect_cube(frame)
+
+    if result is None:
         return None
 
-    # Paso 5 — Calcular centroide (cx, cy)
-    x, y, w, h = cv.boundingRect(cnt)
-    cx = float(x + w / 2)
-    cy = float(y + h / 2)
-
-    # Paso 6 — Convertir a mm
-    x_mm, y_mm = pixel_a_mm(cx, cy)
-
-    log.info("Cubo '%s': (%.1f,%.1f)px → (%.1f,%.1f)mm",
-             color, cx, cy, x_mm, y_mm)
-
-    # Paso 7 — Devolver posición
-    return (x_mm, y_mm)
+    return result["x_mm"], result["y_mm"]
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# VALIDACIÓN P6 — tabla de 3 posiciones
-# Ejecutar: python3 vision.py
-# 'g' = guardar medición | 'q' = salir
-# ════════════════════════════════════════════════════════════════════════════
+def detect_color(frame):
+    result = detect_cube(frame)
 
-def validar_deteccion():
-    """Valida la detección en 3 posiciones distintas del objeto."""
-    cap = cv.VideoCapture(0)
-    cap.set(6, cv.VideoWriter.fourcc('M', 'J', 'P', 'G'))
-    cap.set(cv.CAP_PROP_FRAME_WIDTH,  IMG_W)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, IMG_H)
+    if result is None:
+        return None
 
-    if not cap.isOpened():
-        log.error("No se pudo abrir la cámara.")
-        return
-
-    log.info("Cámara abierta. 'g'=guardar  'q'=salir")
-    mediciones = []
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        resultado = detect_object(frame, TARGET_COLOR)
-        frame_show = frame.copy()
-
-        if resultado:
-            x_mm, y_mm = resultado
-            cv.putText(frame_show,
-                       f"x={x_mm:.1f}mm  y={y_mm:.1f}mm",
-                       (10, 30), cv.FONT_HERSHEY_SIMPLEX,
-                       0.8, (0, 255, 0), 2)
-        else:
-            cv.putText(frame_show, "No detectado",
-                       (10, 30), cv.FONT_HERSHEY_SIMPLEX,
-                       0.8, (0, 0, 255), 2)
-
-        cv.imshow("P6 - Validacion vision", frame_show)
-
-        key = cv.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('g') and resultado:
-            mediciones.append(resultado)
-            log.info("Medicion %d: (%.1f, %.1f) mm",
-                     len(mediciones), resultado[0], resultado[1])
-
-    cap.release()
-    cv.destroyAllWindows()
-
-    # Tabla de validación para el informe
-    print("\n══ TABLA DE VALIDACIÓN P6 ══")
-    print(f"{'#':>3} | {'x_real(mm)':>10} | {'y_real(mm)':>10} | "
-          f"{'x_det(mm)':>10} | {'y_det(mm)':>10} | {'error(mm)':>10}")
-    print("-" * 65)
-    for i, (x, y) in enumerate(mediciones):
-        print(f"{i+1:>3} | {'medir':>10} | {'medir':>10} | "
-              f"{x:>10.1f} | {y:>10.1f} | {'calcular':>10}")
-    print("\nCompleta x_real e y_real midiendo con regla en el laboratorio.")
+    return result["color"]
 
 
 if __name__ == "__main__":
-    validar_deteccion()
+    cap = cv2.VideoCapture(0)
+
+    if not cap.isOpened():
+        print("No se pudo abrir la cámara")
+        exit()
+
+    while True:
+        ret, frame = cap.read()
+
+        if not ret:
+            print("No se pudo leer la cámara")
+            break
+
+        result = detect_cube(frame)
+
+        if result is not None:
+            cx = result["cx"]
+            cy = result["cy"]
+            color = result["color"]
+            x_mm = result["x_mm"]
+            y_mm = result["y_mm"]
+            board_points = result["board_points"].astype(int)
+
+            cv2.polylines(frame, [board_points], True, (0, 255, 0), 2)
+            cv2.circle(frame, (cx, cy), 8, (0, 0, 255), -1)
+
+            text = f"{color} x={x_mm:.1f} y={y_mm:.1f}"
+            cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+            print(text)
+
+        cv2.imshow("vision", frame)
+
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord("q"):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+vision.py
+Mostrando vision.py.
