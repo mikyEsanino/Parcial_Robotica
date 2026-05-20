@@ -1,20 +1,3 @@
-
-
-Ir al contenido
-Uso de Correo de Universidad ESAN con lectores de pantalla
-
-1 de 2.833
-codigo
-Recibidos
-
-Jose Miguel APOLAYA LIRA <23100173@ue.edu.pe>
-Archivos adjuntos
-17:00 (hace 0 minutos)
-para mí
-
-
- Un archivo adjunto
-  •  Analizados por Gmail
 import cv2
 import numpy as np
 
