@@ -304,12 +304,14 @@ def dh(t,d,a,al):
     ct,st,ca,sa=np.cos(t),np.sin(t),np.cos(al),np.sin(al)
     return np.array([[ct,-st*ca,st*sa,a*ct],[st,ct*ca,-ct*sa,a*st],[0,sa,ca,d],[0,0,0,1]])
 
-T = dh(0, 173.5, 0,  90) @ \
-    dh(0, 113.4, 0,   0) @ \
-    dh(0,  96.0, 0,   0) @ \
-    dh(0,  63.4, 0, -90) @ \
-    dh(0,  75.05,0,  90) @ \
-    dh(0,  51.8, 0,   0)
+# Probamos diferentes alpha para A1
+for al1 in [90, -90, 0, 180]:
+    T = dh(0, 173.5, 0, al1) @ \
+        dh(0, 113.4, 0,   0) @ \
+        dh(0,  96.0, 0,   0) @ \
+        dh(0,  63.4, 0, -90) @ \
+        dh(0,  75.05,0,  90) @ \
+        dh(0,  51.8, 0,   0)
+    print(f"alpha1={al1:4d}: ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
 
-print(f"Todo como d: ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
 print(f"Real:        (51.8, -63.4, 409.8)")
