@@ -71,11 +71,11 @@ class InverseKinematics:
         self.fk_solver = ForwardKinematics(dh_params)
 
         # Longitudes de eslabón para modelo planar 2R + base (joints 1-3)
-        self.d1  = dh_params[0][1]   # 134.65  (altura base)
-        self.a2  = abs(dh_params[1][2])  # 110.0
-        self.a3  = abs(dh_params[2][2])  #  96.0
+        self.d1  = dh_params[1][1]   # 134.65  (altura base)
+        self.a2  = abs(dh_params[2][2])  # 110.0
+        self.a3  = abs(dh_params[3][2])  #  96.0
         # Offset vertical del muñeca (d4)
-        self.d4  = dh_params[3][1]   # 63.4
+        self.d4  = dh_params[4][1]   # 63.4
 
     def ik_solve(self, x, y, z, rx=0.0, ry=0.0, rz=0.0):
         """
