@@ -296,8 +296,6 @@ for idx, (x, y, z) in enumerate(tres_posiciones, 1):
     else:
         print(f"Pos {idx} {[x,y,z]} | Error al leer los ángulos de los motores.")
 
-# Probamos combinaciones de signos
-import numpy as np
 
 def dh(t,d,a,al):
     t,al=np.radians(t),np.radians(al)
@@ -306,16 +304,17 @@ def dh(t,d,a,al):
 
 d1=173.5; a2=113.4; a3=96.0; d4=63.4; d5=75.05; d6=51.8
 
-combos = [
-    (  0,  a2,  a3, "++"),
-    (  0, -a2,  a3, "-+"),
-    (  0,  a2, -a3, "+-"),
-    (  0, -a2, -a3, "--"),
-]
-
-for off2, _a2, _a3, label in combos:
-    T = dh(0,d1,0,90) @ dh(off2,0,_a2,0) @ dh(0,0,_a3,0) @ \
-        dh(0,d4,0,-90) @ dh(0,d5,0,90) @ dh(0,d6,0,0)
-    print(f"a2{label[0]} a3{label[1]}: ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
-
-print(f"\nReal: (50.3, -63.3, 409.8)")
+# Probamos offset en q2 Y q4
+for off2 in [-90, 90, 0]:
+    for off4 in [-90, 90, 0]:
+        T = dh(0,      d1, 0,  90) @ \
+            dh(off2,   0,  a2,  0) @ \
+            dh(0,      0,  a3,  0) @ \
+            dh(off4,   d4, 0, -90) @ \
+            dh(0,      d5, 0,  90) @ \
+            dh(0,      d6, 0,   0)
+        z = T[2,3]
+        if abs(z - 409.8) < 20:
+            print(f"✅ off2={off2}, off4={off4} → ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
+        else:
+            print(f"   off2={off2}, off4={off4} → Z={z:.1f}")
