@@ -304,23 +304,12 @@ def dh(t,d,a,al):
     ct,st,ca,sa=np.cos(t),np.sin(t),np.cos(al),np.sin(al)
     return np.array([[ct,-st*ca,st*sa,a*ct],[st,ct*ca,-ct*sa,a*st],[0,sa,ca,d],[0,0,0,1]])
 
-# Buscar d1 real — cuando q2=90 y q3=90, solo queda d1 + muñeca en Z
-# [0,90,90,0,0,0] -> coords que obtuvimos: necesito ese dato
+T = dh(0, 173.5, 0,  90) @ \
+    dh(0, 113.4, 0,   0) @ \
+    dh(0,  96.0, 0,   0) @ \
+    dh(0,  63.4, 0, -90) @ \
+    dh(0,  75.05,0,  90) @ \
+    dh(0,  51.8, 0,   0)
 
-# Por ahora, suma total real:
-# Z_home = 409.8
-# Z_max_DH_actual = 248.6
-# Diferencia = 161.2mm faltante
-
-# ¿Cuánto da cada parámetro solo?
-params = {
-    'd1': 173.5,
-    'a2': 113.4, 
-    'a3': 96.0,
-    'd4': 63.4,
-    'd5': 75.05,
-    'd6': 51.8
-}
-print("Suma total parámetros:", sum(params.values()))
-print("Z real home:", 409.8)
-print("Diferencia:", 409.8 - sum(params.values()))
+print(f"Todo como d: ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
+print(f"Real:        (51.8, -63.4, 409.8)")
