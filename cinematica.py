@@ -25,27 +25,27 @@ def rotz(ang):
 def DH(theta,d,a,alpha):
   tr = rotz(theta)*trans(0,0,d)*trans(a,0,0)*rotx(alpha)
   return tr
- 
+
 # definimos las variables simbolicas
 θ1, θ2, θ3, θ4, θ5, θ6 = sp.symbols('θ1 θ2 θ3 θ4 θ5 θ6')
- 
+
 # armamos las 6 matrices de transformación con los parametros DH
-A1 = DH(θ1, 131.56, 0, sp.pi/2)
+A1 = DH(θ1, 173.5, 0, sp.pi/2) # d1 deducido: cuando J2=90, Z=173.5
 sp.pprint(A1)
- 
-A2 = DH(θ2, 0, 110.4, 0)
+
+A2 = DH(θ2, 0, 113.4, 0) # a2 deducido: cuando J3=90, Z=286.9 -> a2=286.9-173.5
 sp.pprint(A2)
- 
-A3 = DH(θ3, 0, 96, 0)
+
+A3 = DH(θ3, 0, 96, 0) # a3 se mantiene del manual
 sp.pprint(A3)
- 
-A4 = DH(θ4, 66.39, 0, -sp.pi/2)
+
+A4 = DH(θ4, 66.39, 0, -sp.pi/2) # d4 del manual
 sp.pprint(A4)
- 
-A5 = DH(θ5, 73.18, 0, sp.pi/2)
+
+A5 = DH(θ5, 73.18, 0, sp.pi/2) # d5 del manual
 sp.pprint(A5)
- 
-A6 = DH(θ6, 48.6, 0, 0)
+
+A6 = DH(θ6, 48.6, 0, 0) # d6 del manual
 sp.pprint(A6)
  
  
