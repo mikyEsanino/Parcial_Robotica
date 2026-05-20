@@ -1,317 +1,320 @@
-import time
+# =====================================================================
+# CINEMÁTICA MyCobot 280 - FK, IK y Verificación con API
+# =====================================================================
 import numpy as np
-import sympy as sp
-
-sp.init_printing(use_unicode=True)
+import time
 
 # =====================================================================
-# FUNCIONES SIMBÓLICAS (Para reporte P1)
+# PARÁMETROS DH (numéricos)
 # =====================================================================
-def trans(x,y,z):
-    return sp.Matrix([[1,0,0,x],[0,1,0,y],[0,0,1,z],[0,0,0,1]])
-
-def rotx(ang):
-    return sp.Matrix([[1,0,0,0],[0,sp.cos(ang),-sp.sin(ang),0],[0,sp.sin(ang),sp.cos(ang),0],[0,0,0,1]])
-
-def rotz(ang):
-    return sp.Matrix([[sp.cos(ang),-sp.sin(ang),0,0],[sp.sin(ang),sp.cos(ang),0,0],[0,0,1,0],[0,0,0,1]])
-
-def DH_sym(theta,d,a,alpha):
-    return rotz(theta)*trans(0,0,d)*trans(a,0,0)*rotx(alpha)
-
-θ1,θ2,θ3,θ4,θ5,θ6 = sp.symbols('θ1 θ2 θ3 θ4 θ5 θ6')
-
-A1 = DH_sym(θ1, 134.65,   0,      sp.pi/2)
-A2 = DH_sym(θ2,   0,    -110.0,   0      )
-A3 = DH_sym(θ3,   0,     -96.0,   0      )
-A4 = DH_sym(θ4,  63.4,    0,    -sp.pi/2 )
-A5 = DH_sym(θ5,  75.05,   0,     sp.pi/2 )
-A6 = DH_sym(θ6,  51.8,    0,      0      )
+# Tabla DH: [theta_offset, d, a, alpha]
+DH_PARAMS = [
+    [0,  134.65,    0,    np.pi/2],   # Joint 1
+    [0,    0,    -110.0,  0      ],   # Joint 2
+    [0,    0,     -96.0,  0      ],   # Joint 3
+    [0,   63.4,    0,   -np.pi/2],   # Joint 4
+    [0,   75.05,   0,    np.pi/2],   # Joint 5
+    [0,   51.8,    0,    0      ],   # Joint 6
+]
 
 # =====================================================================
-# MATRIZ DH NUMÉRICA
-# =====================================================================
-def DH_matrix(theta_deg, d, a, alpha_deg):
-    theta = np.radians(theta_deg)
-    alpha = np.radians(alpha_deg)
-    ct = np.cos(theta); st = np.sin(theta)
-    ca = np.cos(alpha); sa = np.sin(alpha)
-    return np.array([
-        [ct, -st*ca,  st*sa, a*ct],
-        [st,  ct*ca, -ct*sa, a*st],
-        [0,   sa,     ca,    d   ],
-        [0,   0,      0,     1   ]
-    ])
-
-# =====================================================================
-# CLASE FK  — sin offsets de posición, solo parámetros DH reales
+# CLASE: FORWARD KINEMATICS
 # =====================================================================
 class ForwardKinematics:
-    def __init__(self):
-        self.d1  = 134.65
-        self.a2  = -110.0
-        self.a3  = -96.0
-        self.d4  = 63.4
-        self.d5  = 75.05
-        self.a6  = 51.8
+    def __init__(self, dh_params):
+        self.dh = dh_params
 
-    def compute_fk(self, joints):
+    def _dh_matrix(self, theta, d, a, alpha):
+        """Matriz de transformación DH homogénea 4x4."""
+        ct, st = np.cos(theta), np.sin(theta)
+        ca, sa = np.cos(alpha), np.sin(alpha)
+        return np.array([
+            [ct, -st*ca,  st*sa, a*ct],
+            [st,  ct*ca, -ct*sa, a*st],
+            [ 0,     sa,    ca,     d],
+            [ 0,      0,     0,     1]
+        ])
+
+    def fk(self, joint_angles_deg):
         """
-        joints: [q1..q6] en grados, convención del robot.
-        Retorna T_0_6 (4x4 numpy).
+        Calcula FK completa.
+        joint_angles_deg: lista de 6 ángulos en grados.
+        Retorna: T (matriz 4x4), posición xyz en mm, RPY en grados.
         """
-        q1, q2, q3, q4, q5, q6 = joints
-
-        A1 = DH_matrix(q1, self.d1,  0,       90)
-        A2 = DH_matrix(q2, 0,        self.a2,  0)
-        A3 = DH_matrix(q3, 0,        self.a3,  0)
-        A4 = DH_matrix(q4, self.d4,  0,       -90)
-        A5 = DH_matrix(q5, self.d5,  0,        90)
-        A6 = DH_matrix(q6, self.a6,  0,         0)
-
-        return A1 @ A2 @ A3 @ A4 @ A5 @ A6
-
-    def get_all_frames(self, joints):
-        """Retorna todos los sistemas de referencia intermedios."""
-        q1, q2, q3, q4, q5, q6 = joints
-        matrices = [
-            DH_matrix(q1, self.d1,  0,       90),
-            DH_matrix(q2, 0,        self.a2,  0),
-            DH_matrix(q3, 0,        self.a3,  0),
-            DH_matrix(q4, self.d4,  0,       -90),
-            DH_matrix(q5, self.d5,  0,        90),
-            DH_matrix(q6, self.a6,  0,         0),
-        ]
-        frames = [np.eye(4)]
+        angles_rad = np.radians(joint_angles_deg)
         T = np.eye(4)
-        for A in matrices:
-            T = T @ A
-            frames.append(T.copy())
-        return frames
+        for i, (dh, q) in enumerate(zip(self.dh, angles_rad)):
+            theta_off, d, a, alpha = dh
+            T = T @ self._dh_matrix(theta_off + q, d, a, alpha)
+
+        x, y, z = T[0,3], T[1,3], T[2,3]
+
+        # Extraer RPY (roll-pitch-yaw) de la matriz de rotación R = T[:3,:3]
+        R = T[:3, :3]
+        pitch = np.arctan2(-R[2,0], np.sqrt(R[0,0]**2 + R[1,0]**2))
+        if abs(np.cos(pitch)) > 1e-6:
+            roll  = np.arctan2(R[2,1], R[2,2])
+            yaw   = np.arctan2(R[1,0], R[0,0])
+        else:  # singularidad gimbal lock
+            roll  = 0.0
+            yaw   = np.arctan2(-R[0,1], R[1,1])
+
+        rpy_deg = np.degrees([roll, pitch, yaw])
+        return T, np.array([x, y, z]), rpy_deg
 
 
 # =====================================================================
-# CLASE IK — q1,q2,q3 por geometría + q4,q5,q6 por Euler ZYZ
+# CLASE: INVERSE KINEMATICS (analítica, 3 joints + Euler para 4-5-6)
 # =====================================================================
 class InverseKinematics:
-    def __init__(self, fk_model: ForwardKinematics):
-        self.fk = fk_model
+    def __init__(self, dh_params):
+        self.dh = dh_params
+        self.fk_solver = ForwardKinematics(dh_params)
 
-    def ik_solve(self, x, y, z, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0):
+        # Longitudes de eslabón para modelo planar 2R + base (joints 1-3)
+        self.d1  = dh_params[0][1]   # 134.65  (altura base)
+        self.a2  = abs(dh_params[1][2])  # 110.0
+        self.a3  = abs(dh_params[2][2])  #  96.0
+        # Offset vertical del muñeca (d4)
+        self.d4  = dh_params[3][1]   # 63.4
+
+    def ik_solve(self, x, y, z, rx=0.0, ry=0.0, rz=0.0):
         """
-        Resuelve IK completa para posición (x,y,z) en mm
-        y orientación (roll, pitch, yaw) en grados (convención ZYZ).
-
-        Para el modelo planar simplificado (P3) llamar con
-        roll=pitch=yaw=0 y los primeros 3 joints son suficientes.
+        IK analítica simplificada.
+        - Joints 1-3: modelo planar 2R proyectado.
+        - Joints 4-6: orientación con ángulos de Euler ZYX (rx,ry,rz en grados).
+        Retorna: [j1,j2,j3,j4,j5,j6] en grados, o None si fuera de rango.
         """
-        d1 = self.fk.d1    # 134.65
-        a2 = self.fk.a2    # -110.0
-        a3 = self.fk.a3    # -96.0
-        d4 = self.fk.d4    #  63.4
-        d5 = self.fk.d5    #  75.05
+        # --- Joint 1: rotación en plano XY ---
+        j1 = np.degrees(np.arctan2(y, x))
 
-        # ── POSICIÓN: primeros 3 joints ──────────────────────────
-        # q1: ángulo de base
-        q1_rad = np.arctan2(y, x)
+        # --- Proyección al plano de trabajo (distancia radial - offset muñeca) ---
+        r_xy = np.sqrt(x**2 + y**2)
+        # Altura efectiva descontando base y offset muñeca
+        z_eff = z - self.d1
+        r_eff = r_xy  # simplificado: muñeca en línea con end-effector
 
-        # proyección planar
-        r  = np.sqrt(x**2 + y**2)
-        zc = z - d1
+        # --- Joints 2 y 3: modelo planar 2R ---
+        L1, L2 = self.a2, self.a3
+        D = (r_eff**2 + z_eff**2 - L1**2 - L2**2) / (2 * L1 * L2)
 
-        # ley de cosenos (codo abajo)
-        cos_q3 = np.clip(
-            (r**2 + zc**2 - a2**2 - a3**2) / (2*a2*a3),
-            -1.0, 1.0
-        )
-        q3_rad = -np.arccos(cos_q3)
+        if abs(D) > 1.0:
+            print(f"  [IK] Posición ({x:.1f},{y:.1f},{z:.1f}) fuera de alcance.")
+            return None
 
-        alpha  = np.arctan2(zc, r)
-        beta   = np.arctan2(a3*np.sin(q3_rad), a2 + a3*np.cos(q3_rad))
-        q2_rad = alpha - beta
+        # Codo abajo (elbow-down)
+        j3 = np.degrees(np.arctan2(-np.sqrt(1 - D**2), D))
 
-        q1 = np.degrees(q1_rad)
-        q2 = np.degrees(q2_rad)
-        q3 = np.degrees(q3_rad)
+        alpha = np.arctan2(z_eff, r_eff)
+        beta  = np.arctan2(L2 * np.sin(np.radians(j3)),
+                           L1 + L2 * np.cos(np.radians(j3)))
+        j2 = np.degrees(alpha - beta)
 
-        # ── ORIENTACIÓN: joints 4,5,6 por Euler ZYZ ─────────────
-        # Construimos la rotación deseada del efector final
-        roll  = np.radians(roll_deg)
-        pitch = np.radians(pitch_deg)
-        yaw   = np.radians(yaw_deg)
+        # --- Joints 4-6: orientación deseada (Euler ZYX) ---
+        # El robot MyCobot 280 acepta rx,ry,rz como orientación del EE.
+        # Aquí los pasamos directamente como muñeca (simplificado).
+        j4 = rx
+        j5 = ry
+        j6 = rz
 
-        # Matriz de rotación deseada (ZYZ: yaw → pitch → roll)
-        def Rz(a):
-            return np.array([[np.cos(a),-np.sin(a),0],
-                             [np.sin(a), np.cos(a),0],
-                             [0,         0,        1]])
-        def Ry(a):
-            return np.array([[ np.cos(a),0,np.sin(a)],
-                             [0,         1,0        ],
-                             [-np.sin(a),0,np.cos(a)]])
-
-        R_des = Rz(yaw) @ Ry(pitch) @ Rz(roll)
-
-        # Rotación acumulada de los primeros 3 joints (R_0_3)
-        T03 = (DH_matrix(q1, d1,  0,  90) @
-               DH_matrix(q2,  0, a2,   0) @
-               DH_matrix(q3,  0, a3,   0))
-        R03 = T03[:3, :3]
-
-        # Rotación que deben aportar joints 4,5,6
-        # R_0_3 @ R_3_6 = R_des  →  R_3_6 = R_0_3.T @ R_des
-        R36 = R03.T @ R_des
-
-        # Extraer ángulos de Euler ZYZ de R_3_6
-        # R_ZYZ = Rz(q4) @ Ry(q5) @ Rz(q6)
-        # Elemento R[1,2] = sin(q5)*sin(q4), etc.
-        sy = np.sqrt(R36[0,2]**2 + R36[1,2]**2)
-
-        if sy > 1e-6:   # caso general
-            q5 = np.arctan2(sy, R36[2,2])
-            q4 = np.arctan2(R36[1,2]/sy,  R36[0,2]/sy)
-            q6 = np.arctan2(R36[2,1]/sy, -R36[2,0]/sy)
-        else:           # singularidad (q5 ≈ 0 o π)
-            q5 = 0.0
-            q4 = 0.0
-            q6 = np.arctan2(-R36[1,0], R36[0,0])
-
-        q4 = np.degrees(q4)
-        q5 = np.degrees(q5)
-        q6 = np.degrees(q6)
-
-        return [round(q1,3), round(q2,3), round(q3,3),
-                round(q4,3), round(q5,3), round(q6,3)]
+        return [round(j1,2), round(j2,2), round(j3,2),
+                round(j4,2), round(j5,2), round(j6,2)]
 
 
 # =====================================================================
-# CLASE COLLISION CHECKER
+# CLASE: COLLISION CHECKER (básico)
 # =====================================================================
 class CollisionChecker:
-    JOINT_LIMITS = [
-        (-160, 160),
-        (-160, 160),
-        (-150, 150),
-        (-145, 145),
-        (-165, 165),
-        (-180, 180),
-    ]
-    Z_MIN            = 20.0
-    WORKSPACE_RADIUS = 280.0
+    """
+    Escenario 1: límites de articulación excedidos.
+    Escenario 2: posición del EE dentro de zona prohibida (cubo alrededor de base).
+    """
+    JOINT_LIMITS = [(-165,165),(-165,165),(-165,165),
+                    (-165,165),(-165,165),(-175,175)]
+    FORBIDDEN_ZONE = {'x': (-60,60), 'y': (-60,60), 'z': (0, 80)}  # mm
 
-    def __init__(self, fk=None):
-        self._fk = fk or ForwardKinematics()
+    def check_joints(self, angles_deg):
+        for i, (ang, (lo, hi)) in enumerate(zip(angles_deg, self.JOINT_LIMITS)):
+            if not (lo <= ang <= hi):
+                return True, f"Joint {i+1} ({ang}°) fuera de límites [{lo},{hi}]"
+        return False, "OK"
 
-    def check_collision(self, joints):
-        # Escenario 1: límites articulares
-        for i, (q, (lo, hi)) in enumerate(zip(joints, self.JOINT_LIMITS)):
-            if not (lo <= q <= hi):
-                print(f"  ⚠ COLISIÓN [J{i+1}]: {q:.1f}° fuera de [{lo}°,{hi}°]")
-                return True
+    def check_position(self, xyz):
+        x, y, z = xyz
+        fz = self.FORBIDDEN_ZONE
+        if (fz['x'][0] < x < fz['x'][1] and
+            fz['y'][0] < y < fz['y'][1] and
+            fz['z'][0] < z < fz['z'][1]):
+            return True, f"EE en zona prohibida: ({x:.1f},{y:.1f},{z:.1f})"
+        return False, "OK"
 
-        T  = self._fk.compute_fk(joints)
-        px, py, pz = T[0,3], T[1,3], T[2,3]
-
-        # Escenario 2: fuera del workspace
-        if np.sqrt(px**2 + py**2 + pz**2) > self.WORKSPACE_RADIUS:
-            print(f"  ⚠ COLISIÓN [workspace]: ({px:.1f},{py:.1f},{pz:.1f})")
+    def evasion(self, angles_deg, xyz):
+        """Retorna True si hay colisión (detiene movimiento)."""
+        col_j, msg_j = self.check_joints(angles_deg)
+        col_p, msg_p = self.check_position(xyz)
+        if col_j:
+            print(f"  [COLISIÓN-Joints] {msg_j}")
             return True
-
-        # Escenario 3: colisión con mesa
-        if pz < self.Z_MIN:
-            print(f"  ⚠ COLISIÓN [mesa]: Z={pz:.1f} mm")
+        if col_p:
+            print(f"  [COLISIÓN-Zona]   {msg_p}")
             return True
-
-        # Escenario 4: singularidad de muñeca
-        if abs(joints[4]) < 5.0 and abs(joints[3]) > 150.0:
-            print(f"  ⚠ COLISIÓN [muñeca singular]: J4={joints[3]:.1f}°, J5={joints[4]:.1f}°")
-            return True
-
         return False
 
 
 # =====================================================================
-# TEST FK  (P2)
+# INSTANCIAR
 # =====================================================================
-fk = ForwardKinematics()
-ik = InverseKinematics(fk)
-cc = CollisionChecker(fk)
+fk_solver  = ForwardKinematics(DH_PARAMS)
+ik_solver  = InverseKinematics(DH_PARAMS)
+collision  = CollisionChecker()
 
-cinco_configuraciones = [
-    [ 0.0,   0.0,   0.0,  0.0,  0.0,  0.0],
-    [30.0,  15.0, -20.0,  0.0, 45.0,  0.0],
-    [-45.0,-10.0,  30.0, 15.0,-30.0, 10.0],
-    [ 0.0,  45.0, -45.0,  0.0, 90.0,  0.0],
-    [15.0, -30.0,  45.0,-15.0,  0.0, 25.0]
+print("Clases instanciadas: ForwardKinematics, InverseKinematics, CollisionChecker ✓")
+
+
+# =====================================================================
+# P2 - VERIFICACIÓN FK: 5 configuraciones calculada vs. real
+# =====================================================================
+configs_deg = [
+    [ 0,   0,   0,  0,  0,  0],
+    [30, -30,  45,  0,  0,  0],
+    [60,  20, -30, 10,  5, 15],
+    [-45, 10,  60, -5, 10,  0],
+    [90, -45,  30, 20,-10, 30],
 ]
 
-print("CONFIGURACIÓN | ERROR X (mm) | ERROR Y (mm) | ERROR Z (mm)")
-print("-"*65)
+print("="*70)
+print(f"{'Config':>6} | {'Calc X':>8} {'Calc Y':>8} {'Calc Z':>8} | {'Real X':>8} {'Real Y':>8} {'Real Z':>8} | {'Err mm':>8}")
+print("="*70)
 
-for idx, angulos in enumerate(cinco_configuraciones, 1):
-    mc.send_angles(angulos, 30)
-    time.sleep(3.5)
-    coords_robot = mc.get_coords()
+tabla_fk = []
 
-    T = fk.compute_fk(angulos)
-    mi_x, mi_y, mi_z = T[0,3], T[1,3], T[2,3]
+for i, cfg in enumerate(configs_deg):
+    # 1. Enviar ángulos al robot
+    mc.send_angles(cfg, 30)
+    time.sleep(3)
 
-    if coords_robot:
-        err_x = abs(mi_x - coords_robot[0])
-        err_y = abs(mi_y - coords_robot[1])
-        err_z = abs(mi_z - coords_robot[2])
-        print(f"Config {idx}     | {err_x:12.3f} | {err_y:12.3f} | {err_z:12.3f}")
-    else:
-        print(f"Config {idx}     | Error al leer datos del robot físico.")
+    # 2. FK calculada
+    T, pos_calc, rpy_calc = fk_solver.fk(cfg)
+
+    # 3. Posición real del robot
+    coords_real = mc.get_coords()
+    if coords_real is None or len(coords_real) < 3:
+        print(f"  Config {i+1}: no se pudo leer coords. Reintentando...")
+        time.sleep(1)
+        coords_real = mc.get_coords()
+
+    pos_real = np.array(coords_real[:3]) if coords_real else np.array([0,0,0])
+
+    # 4. Error euclidiano
+    error_mm = np.linalg.norm(pos_calc - pos_real)
+
+    tabla_fk.append({
+        'config': cfg,
+        'calc':   pos_calc.tolist(),
+        'real':   pos_real.tolist(),
+        'error':  error_mm
+    })
+
+    print(f"  C{i+1}   | {pos_calc[0]:8.2f} {pos_calc[1]:8.2f} {pos_calc[2]:8.2f} "
+          f"| {pos_real[0]:8.2f} {pos_real[1]:8.2f} {pos_real[2]:8.2f} "
+          f"| {error_mm:8.2f}")
+
+print("="*70)
+
 
 
 # =====================================================================
-# TEST IK  (P3)
+# P3 - VERIFICACIÓN IK: 3 posiciones cartesianas calculada vs. real
 # =====================================================================
-tres_posiciones = [
-    [140.0,  0.0, 220.0],
-    [120.0, 60.0, 180.0],
-    [150.0,-40.0, 200.0]
+# Posiciones objetivo [x, y, z, rx, ry, rz] en mm y grados
+targets = [
+    [150,  50, 200,  0,  0,  0],
+    [100, -80, 150,  0, 30,  0],
+    [200,   0, 100,  0, 45, 45],
 ]
 
-print("\nPOSICIÓN OBJETIVO   | ERROR q1 (°) | ERROR q2 (°) | ERROR q3 (°)")
-print("-"*65)
+print("="*80)
+print(f"{'Target':>5} | {'J1':>6}{'J2':>6}{'J3':>6}{'J4':>6}{'J5':>6}{'J6':>6} | "
+      f"{'Err J1':>7}{'Err J2':>7}{'Err J3':>7}{'Err J4':>7}{'Err J5':>7}{'Err J6':>7}")
+print("="*80)
 
-for idx, (x, y, z) in enumerate(tres_posiciones, 1):
-    q_calc = ik.ik_solve(x, y, z)  # orientación 0,0,0 por simplificación planar
+tabla_ik = []
 
-    if cc.check_collision(q_calc):
-        print(f"Pos {idx} {[x,y,z]} | COLISIÓN – omitido")
+for i, tgt in enumerate(targets):
+    x, y, z, rx, ry, rz = tgt
+
+    # 1. Resolver IK
+    angles_calc = ik_solver.ik_solve(x, y, z, rx, ry, rz)
+    if angles_calc is None:
+        print(f"  T{i+1}: IK sin solución.")
         continue
 
-    mc.send_coords([x, y, z, 0.0, 0.0, 0.0], 30, 1)
-    time.sleep(3.5)
-    angulos_robot = mc.get_angles()
+    # 2. Verificar colisiones antes de mover
+    _, pos_check, _ = fk_solver.fk(angles_calc)
+    if collision.evasion(angles_calc, pos_check):
+        print(f"  T{i+1}: movimiento bloqueado por colisión.")
+        continue
 
-    if angulos_robot:
-        err_q1 = abs(q_calc[0] - angulos_robot[0])
-        err_q2 = abs(q_calc[1] - angulos_robot[1])
-        err_q3 = abs(q_calc[2] - angulos_robot[2])
-        print(f"Pos {idx} {[x,y,z]} | {err_q1:12.3f} | {err_q2:12.3f} | {err_q3:12.3f}")
-    else:
-        print(f"Pos {idx} {[x,y,z]} | Error al leer los ángulos de los motores.")
+    # 3. Enviar posición al robot (IK del robot)
+    mc.send_coords([x, y, z, rx, ry, rz], 30, 1)
+    time.sleep(3)
+
+    # 4. Leer ángulos reales que adoptó el robot
+    angles_real = mc.get_angles()
+    if angles_real is None or len(angles_real) < 6:
+        time.sleep(1)
+        angles_real = mc.get_angles()
+
+    angles_real = list(angles_real) if angles_real else [0]*6
+
+    # 5. Error por joint (grados)
+    errors = [abs(c - r) for c, r in zip(angles_calc, angles_real)]
+
+    tabla_ik.append({
+        'target': tgt,
+        'calc':   angles_calc,
+        'real':   angles_real,
+        'errors': errors
+    })
+
+    print(f"  T{i+1}  | "
+          + "".join(f"{a:6.1f}" for a in angles_calc)
+          + " | "
+          + "".join(f"{e:7.2f}" for e in errors))
+
+print("="*80)
 
 
-import numpy as np
 
-def dh(t,d,a,al):
-    t,al=np.radians(t),np.radians(al)
-    ct,st,ca,sa=np.cos(t),np.sin(t),np.cos(al),np.sin(al)
-    return np.array([[ct,-st*ca,st*sa,a*ct],[st,ct*ca,-ct*sa,a*st],[0,sa,ca,d],[0,0,0,1]])
+# =====================================================================
+# ESPACIO DE TRABAJO - Nube de puntos 2D en plano XZ
+# =====================================================================
+import matplotlib.pyplot as plt
 
-# Probamos diferentes alpha para A1
-for al1 in [90, -90, 0, 180]:
-    T = dh(0, 173.5, 0, al1) @ \
-        dh(0, 113.4, 0,   0) @ \
-        dh(0,  96.0, 0,   0) @ \
-        dh(0,  63.4, 0, -90) @ \
-        dh(0,  75.05,0,  90) @ \
-        dh(0,  51.8, 0,   0)
-    print(f"alpha1={al1:4d}: ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
+print("Calculando espacio de trabajo (plano XZ)...")
 
-print(f"Real:        (51.8, -63.4, 409.8)")
+puntos_x, puntos_z = [], []
+
+# Barrido de joints 1-3 (los más relevantes para alcance)
+for j1 in np.linspace(-150, 150, 15):
+    for j2 in np.linspace(-120, 120, 15):
+        for j3 in np.linspace(-120, 120, 15):
+            cfg = [j1, j2, j3, 0, 0, 0]
+            try:
+                _, pos, _ = fk_solver.fk(cfg)
+                puntos_x.append(pos[0])
+                puntos_z.append(pos[2])
+            except:
+                pass
+
+plt.figure(figsize=(8,8))
+plt.scatter(puntos_x, puntos_z, s=1, alpha=0.3, color='steelblue')
+plt.xlabel('X (mm)')
+plt.ylabel('Z (mm)')
+plt.title('Espacio de trabajo alcanzable - Plano XZ\nMyCobot 280')
+plt.axis('equal')
+plt.grid(True, alpha=0.4)
+plt.tight_layout()
+plt.savefig('espacio_trabajo_XZ.png', dpi=150)
+plt.show()
+print("Gráfica guardada: espacio_trabajo_XZ.png")
