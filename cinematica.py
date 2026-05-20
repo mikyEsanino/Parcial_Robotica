@@ -9,12 +9,12 @@ import time
 # =====================================================================
 # Tabla DH: [theta_offset, d, a, alpha]
 DH_PARAMS = [
-    [0,  134.65,    0,    np.pi/2],   # Joint 1
-    [0,    0,    -110.0,  0      ],   # Joint 2
-    [0,    0,     -96.0,  0      ],   # Joint 3
-    [0,   63.4,    0,   -np.pi/2],   # Joint 4
-    [0,   75.05,   0,    np.pi/2],   # Joint 5
-    [0,   51.8,    0,    0      ],   # Joint 6
+    [0,  0,    0,          0],   # Joint 1
+    [0,    134.65,    0,  np.pi/2],   # Joint 2
+    [-np.pi/2,    0,     -110.0,  0      ],   # Joint 3
+    [0,   0,    -96.0,    0       ],   # Joint 4
+    [np.pi/2,   63.4,   0,    -np.pi/2],   # Joint 5
+    [np.pi/2,   75.05,    51.8,     np.pi/2],   # Joint 6
 ]
 
 # =====================================================================
@@ -25,7 +25,6 @@ class ForwardKinematics:
         self.dh = dh_params
 
     def _dh_matrix(self, theta, d, a, alpha):
-        """Matriz de transformación DH homogénea 4x4."""
         ct, st = np.cos(theta), np.sin(theta)
         ca, sa = np.cos(alpha), np.sin(alpha)
         return np.array([
