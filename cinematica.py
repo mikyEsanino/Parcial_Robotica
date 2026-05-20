@@ -297,24 +297,30 @@ for idx, (x, y, z) in enumerate(tres_posiciones, 1):
         print(f"Pos {idx} {[x,y,z]} | Error al leer los ángulos de los motores.")
 
 
+import numpy as np
+
 def dh(t,d,a,al):
     t,al=np.radians(t),np.radians(al)
     ct,st,ca,sa=np.cos(t),np.sin(t),np.cos(al),np.sin(al)
     return np.array([[ct,-st*ca,st*sa,a*ct],[st,ct*ca,-ct*sa,a*st],[0,sa,ca,d],[0,0,0,1]])
 
-d1=173.5; a2=113.4; a3=96.0; d4=63.4; d5=75.05; d6=51.8
+# Buscar d1 real — cuando q2=90 y q3=90, solo queda d1 + muñeca en Z
+# [0,90,90,0,0,0] -> coords que obtuvimos: necesito ese dato
 
-# Probamos offset en q2 Y q4
-for off2 in [-90, 90, 0]:
-    for off4 in [-90, 90, 0]:
-        T = dh(0,      d1, 0,  90) @ \
-            dh(off2,   0,  a2,  0) @ \
-            dh(0,      0,  a3,  0) @ \
-            dh(off4,   d4, 0, -90) @ \
-            dh(0,      d5, 0,  90) @ \
-            dh(0,      d6, 0,   0)
-        z = T[2,3]
-        if abs(z - 409.8) < 20:
-            print(f"✅ off2={off2}, off4={off4} → ({T[0,3]:.1f}, {T[1,3]:.1f}, {T[2,3]:.1f})")
-        else:
-            print(f"   off2={off2}, off4={off4} → Z={z:.1f}")
+# Por ahora, suma total real:
+# Z_home = 409.8
+# Z_max_DH_actual = 248.6
+# Diferencia = 161.2mm faltante
+
+# ¿Cuánto da cada parámetro solo?
+params = {
+    'd1': 173.5,
+    'a2': 113.4, 
+    'a3': 96.0,
+    'd4': 63.4,
+    'd5': 75.05,
+    'd6': 51.8
+}
+print("Suma total parámetros:", sum(params.values()))
+print("Z real home:", 409.8)
+print("Diferencia:", 409.8 - sum(params.values()))
